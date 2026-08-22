@@ -390,25 +390,21 @@ def to_hinglish(cues: List[dict]) -> List[dict]:
 # ============================================================================
 
 def download_youtube_video(url: str, out_dir: str) -> str:
-    """Downloads the best available mp4 (video+audio) via yt-dlp so we have
-    real source footage to crop - we re-extract a clean mono WAV from this
-    for Whisper separately rather than relying on yt-dlp's compressed audio."""
-    output_template = os.path.join(out_dir, "%(id)s.%(ext)s")
+    """Downloads the best available mp4 (video+audio) via yt-dlp..."""
     import os
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-COOKIE_FILE = os.path.join(BASE_DIR, 'cookies.txt')
+    output_template = os.path.join(out_dir, "%(id)s.%(ext)s")
+    
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    COOKIE_FILE = os.path.join(BASE_DIR, 'cookies.txt')
 
-ydl_opts = {
-    'cookiefile': COOKIE_FILE,
-    # ... rest of ydl_opts
-}
-        },
-        "format": "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-        "outtmpl": output_template,
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "no_warnings": True,
+    ydl_opts = {
+        'cookiefile': COOKIE_FILE,
+        'format': "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        'outtmpl': output_template,
+        'merge_output_format': "mp4",
+        'quiet': True,
+        'no_warnings': True,
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
