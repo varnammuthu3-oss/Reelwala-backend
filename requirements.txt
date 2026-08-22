@@ -1,5 +1,6 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
-setuptools
+setuptools>=65.0.0
+wheel
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 python-multipart==0.0.9
@@ -9,4 +10,4 @@ openai-whisper==20231117
 torch==2.2.2+cpu
 deep-translator==1.11.4
 edge-tts==6.1.12
-indic-transliteration==2.3.55
+indic-transliteration
