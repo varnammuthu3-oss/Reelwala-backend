@@ -396,6 +396,11 @@ def download_youtube_video(url: str, out_dir: str) -> str:
     output_template = os.path.join(out_dir, "%(id)s.%(ext)s")
     ydl_opts = {
         'cookiefile': 'cookies.txt',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['ios', 'mweb', 'android']
+            }
+        },
         "format": "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "outtmpl": output_template,
         "merge_output_format": "mp4",
