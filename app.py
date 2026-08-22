@@ -395,6 +395,7 @@ def download_youtube_video(url: str, out_dir: str) -> str:
     for Whisper separately rather than relying on yt-dlp's compressed audio."""
     output_template = os.path.join(out_dir, "%(id)s.%(ext)s")
     ydl_opts = {
+        'cookiefile': 'cookies.txt',
         "format": "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "outtmpl": output_template,
         "merge_output_format": "mp4",
