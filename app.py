@@ -394,12 +394,15 @@ def download_youtube_video(url: str, out_dir: str) -> str:
     real source footage to crop - we re-extract a clean mono WAV from this
     for Whisper separately rather than relying on yt-dlp's compressed audio."""
     output_template = os.path.join(out_dir, "%(id)s.%(ext)s")
-    ydl_opts = {
-        'cookiefile': 'cookies.txt',
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['ios', 'mweb', 'android']
-            }
+    import os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+COOKIE_FILE = os.path.join(BASE_DIR, 'cookies.txt')
+
+ydl_opts = {
+    'cookiefile': COOKIE_FILE,
+    # ... rest of ydl_opts
+}
         },
         "format": "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "outtmpl": output_template,
