@@ -406,10 +406,11 @@ def download_youtube_video(url: str, out_dir: str) -> str:
         "Content-Type": "application/json"
     }
     
-    res = requests.post("https://co.wuk.sh/api/json", json=payload, headers=headers)
+    # Updated primary Cobalt instance endpoint
+    res = requests.post("https://api.cobalt.tools/", json=payload, headers=headers)
     data = res.json()
     
-    if data.get("status") in ["redirect", "tunnel"]:
+    if data.get("status") in ["redirect", "tunnel", "picker"]:
         video_url = data.get("url")
         video_bytes = requests.get(video_url, stream=True)
         with open(output_path, "wb") as f:
@@ -418,10 +419,6 @@ def download_youtube_video(url: str, out_dir: str) -> str:
         return output_path
     else:
         raise Exception(f"Cobalt download failed: {data}")
-def extract_audio(video_path: str, out_path: str) -> None:
-    """16kHz mono PCM WAV - whisper's expected input format."""
-    cmd = ["ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", out_path]
-    run_subprocess(cmd)
 
 
 _whisper_model = None
