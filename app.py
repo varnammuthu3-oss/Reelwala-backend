@@ -390,30 +390,34 @@ def to_hinglish(cues: List[dict]) -> List[dict]:
 # ============================================================================
 
 def download_youtube_video(url: str, out_dir: str) -> str:
-    """Downloads the best available mp4 (video+audio) via yt-dlp..."""
+    """Downloads YouTube video via Cobalt API to bypass Cloud IP bot checks."""
     import os
+    import requests
 
-    output_template = os.path.join(out_dir, "%(id)s.%(ext)s")
+    output_path = os.path.join(out_dir, "input_video.mp4")
     
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    COOKIE_FILE = os.path.join(BASE_DIR, 'cookies.txt')
-
-    ydl_opts = {
-        'cookiefile': COOKIE_FILE,
-        'format': "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-        'outtmpl': output_template,
-        'merge_output_format': "mp4",
-        'quiet': True,
-        'no_warnings': True,
+    payload = {
+        "url": url,
+        "videoQuality": "720",
+        "downloadMode": "auto"
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        video_path = ydl.prepare_filename(info)
-        base, _ = os.path.splitext(video_path)
-        merged_path = base + ".mp4"
-        return merged_path if os.path.exists(merged_path) else video_path
-
-
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    
+    res = requests.post("https://co.wuk.sh/api/json", json=payload, headers=headers)
+    data = res.json()
+    
+    if data.get("status") in ["redirect", "tunnel"]:
+        video_url = data.get("url")
+        video_bytes = requests.get(video_url, stream=True)
+        with open(output_path, "wb") as f:
+            for chunk in video_bytes.iter_content(chunk_size=8192):
+                f.write(chunk)
+        return output_path
+    else:
+        raise Exception(f"Cobalt download failed: {data}")
 def extract_audio(video_path: str, out_path: str) -> None:
     """16kHz mono PCM WAV - whisper's expected input format."""
     cmd = ["ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", out_path]
