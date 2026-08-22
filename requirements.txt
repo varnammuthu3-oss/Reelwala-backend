@@ -1,0 +1,10 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+pydantic==2.9.2
+yt-dlp==2024.10.7
+openai-whisper==20231117
+torch==2.2.2
+deep-translator==1.11.4
+edge-tts==6.1.12
+indic-transliteration==2.3.55
