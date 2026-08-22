@@ -390,12 +390,19 @@ def to_hinglish(cues: List[dict]) -> List[dict]:
 # ============================================================================
 
 def download_youtube_video(url: str, out_dir: str) -> str:
-    """Downloads YouTube video via open Cobalt API to bypass Cloud IP bot checks."""
+    """Downloads YouTube video with multi-instance fallback to avoid DNS and Bot errors."""
     import os
     import requests
 
     output_path = os.path.join(out_dir, "input_video.mp4")
     
+    # List of active public Cobalt API instances to try sequentially
+    instances = [
+        "https://cobalt-api.kwiatekmom.tokyo/",
+        "https://api.cobalt.red/",
+        "https://cobalt.api.sc3.io/"
+    ]
+
     payload = {
         "url": url,
         "videoQuality": "720",
@@ -405,24 +412,23 @@ def download_youtube_video(url: str, out_dir: str) -> str:
         "Accept": "application/json",
         "Content-Type": "application/json"
     }
-    
-    # Open instance requiring no JWT/API Key
-    res = requests.post("https://cobalt-api.kwiatekmom.tokyo/", json=payload, headers=headers)
-    data = res.json()
-    
-    if data.get("status") in ["redirect", "tunnel", "picker"]:
-        video_url = data.get("url")
-        video_bytes = requests.get(video_url, stream=True)
-        with open(output_path, "wb") as f:
-            for chunk in video_bytes.iter_content(chunk_size=8192):
-                f.write(chunk)
-        return output_path
-    else:
-        raise Exception(f"Cobalt download failed: {data}")
-_whisper_lock = threading.Lock()
 
+    for instance in instances:
+        try:
+            res = requests.post(instance, json=payload, headers=headers, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("status") in ["redirect", "tunnel", "picker"]:
+                    video_url = data.get("url")
+                    video_bytes = requests.get(video_url, stream=True, timeout=15)
+                    with open(output_path, "wb") as f:
+                        for chunk in video_bytes.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    return output_path
+        except Exception:
+            continue  # Try the next instance if one fails or times out
 
-def get_whisper_model():
+    raise Exception("All download instances failed. Please check video URL or try again.")
     """Lazily loads (and caches) the whisper model on first use - loading it
     at import time would slow down every reload/worker boot for no reason."""
     global _whisper_model
