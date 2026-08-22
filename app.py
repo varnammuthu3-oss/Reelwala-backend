@@ -390,7 +390,7 @@ def to_hinglish(cues: List[dict]) -> List[dict]:
 # ============================================================================
 
 def download_youtube_video(url: str, out_dir: str) -> str:
-    """Downloads YouTube video via Cobalt API to bypass Cloud IP bot checks."""
+    """Downloads YouTube video via open Cobalt API to bypass Cloud IP bot checks."""
     import os
     import requests
 
@@ -406,8 +406,8 @@ def download_youtube_video(url: str, out_dir: str) -> str:
         "Content-Type": "application/json"
     }
     
-    # Updated primary Cobalt instance endpoint
-    res = requests.post("https://api.cobalt.tools/", json=payload, headers=headers)
+    # Open instance requiring no JWT/API Key
+    res = requests.post("https://cobalt-api.kwiatekmom.tokyo/", json=payload, headers=headers)
     data = res.json()
     
     if data.get("status") in ["redirect", "tunnel", "picker"]:
@@ -419,9 +419,6 @@ def download_youtube_video(url: str, out_dir: str) -> str:
         return output_path
     else:
         raise Exception(f"Cobalt download failed: {data}")
-
-
-_whisper_model = None
 _whisper_lock = threading.Lock()
 
 
