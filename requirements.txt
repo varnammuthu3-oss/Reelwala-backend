@@ -11,3 +11,4 @@ torch==2.2.2+cpu
 deep-translator==1.11.4
 edge-tts==6.1.12
 indic-transliteration
+pytubefix
