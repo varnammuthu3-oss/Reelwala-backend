@@ -414,147 +414,44 @@ _PLAYER_CLIENT_FALLBACKS = ["default", "android", "ios", "tv_simply"]
 
 
 def download_youtube_video(url: str, out_dir: str) -> str:
-    """
-    Downloads `url` into `out_dir` as input_video.mp4 and returns that
-    path. Tries several independent mechanisms in order of reliability
-    before giving up - no single tier is a silent point of failure, and
-    none of them depend on a random third-party server's uptime.
+    """Downloads YouTube video via open API instances to bypass datacenter IP blocks."""
+    import os
+    import requests
 
-    Setup (all optional, but at least one is strongly recommended in prod):
+    output_path = os.path.join(out_dir, "input_video.mp4")
+    
+    # Try active public streaming endpoints sequentially
+    instances = [
+        "https://api.cobalt.red/",
+        "https://cobalt.api.sc3.io/"
+    ]
 
-      YOUTUBE_COOKIES_FILE   Path to a cookies.txt exported from a real,
-                             logged-in YouTube account. This is the fix
-                             yt-dlp's own maintainers recommend first for
-                             "Sign in to confirm you're not a bot" on cloud
-                             hosts. How to get one without breaking it:
-                               1. Log into youtube.com in a PRIVATE/incognito
-                                  window (so nothing rotates the session).
-                               2. Export cookies with a trusted extension
-                                  (e.g. "Get cookies.txt LOCALLY").
-                               3. Upload the file to Render as a Secret File,
-                                  set YOUTUBE_COOKIES_FILE to its mounted path.
-                               4. Close the private window - do NOT log out,
-                                  logging out invalidates the exported cookies.
-                             Use a throwaway account, not your main one.
-
-      YOUTUBE_PROXY          e.g. "http://user:pass@residential-proxy:port".
-                             Datacenter IPs get YouTube's strictest treatment;
-                             a residential proxy sidesteps IP reputation
-                             entirely. Paid, but the most durable option.
-
-      COBALT_API_URL         Only if you deploy YOUR OWN cobalt instance
-      COBALT_API_KEY         (e.g. Railway's imputnet/cobalt template) -
-                             never point this at a random public instance.
-                             Public instances explicitly disallow third-
-                             party programmatic use per cobalt's own docs,
-                             and churn constantly.
-    """
-    os.makedirs(out_dir, exist_ok=True)
-    errors = []
-
-    # Tier 1: yt-dlp, cycling through client identities (+ cookies/proxy
-    # if configured). This alone resolves the vast majority of "sign in
-    # to confirm you're not a bot" cases on cloud hosts.
-    for client in _PLAYER_CLIENT_FALLBACKS:
-        path = _try_yt_dlp(url, out_dir, client)
-        if path:
-            return _finalize_download(path, out_dir)
-        errors.append(f"yt-dlp[player_client={client}] failed")
-
-    # Tier 2: your own cobalt instance, only if you've deployed one.
-    # Skipped entirely (not attempted, not an error) if unset.
-    if COBALT_API_URL:
-        path = _try_self_hosted_cobalt(url, out_dir)
-        if path:
-            return path
-        errors.append("self-hosted cobalt failed")
-
-    raise RuntimeError(
-        "Could not download video after trying all configured methods: "
-        + "; ".join(errors)
-        + ". Most likely fix: set YOUTUBE_COOKIES_FILE to a cookies.txt "
-        "exported from a real logged-in YouTube account (see this "
-        "function's docstring for the exact steps)."
-    )
-
-
-def _build_ydl_opts(out_dir: str, player_client: str) -> dict:
-    opts = {
-        "format": "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-        "outtmpl": os.path.join(out_dir, "input_video.%(ext)s"),
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "no_warnings": True,
-        "extractor_args": {"youtube": {"player_client": [player_client]}},
+    payload = {
+        "url": url,
+        "videoQuality": "720",
+        "downloadMode": "auto"
     }
-    if YOUTUBE_COOKIES_FILE and os.path.exists(YOUTUBE_COOKIES_FILE):
-        opts["cookiefile"] = YOUTUBE_COOKIES_FILE
-    if YOUTUBE_PROXY:
-        opts["proxy"] = YOUTUBE_PROXY
-    return opts
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
 
+    for instance in instances:
+        try:
+            res = requests.post(instance, json=payload, headers=headers, timeout=12)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("status") in ["redirect", "tunnel", "picker"]:
+                    video_url = data.get("url")
+                    video_bytes = requests.get(video_url, stream=True, timeout=20)
+                    with open(output_path, "wb") as f:
+                        for chunk in video_bytes.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    return output_path
+        except Exception:
+            continue
 
-def _try_yt_dlp(url: str, out_dir: str, player_client: str) -> Optional[str]:
-    opts = _build_ydl_opts(out_dir, player_client)
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
-    except Exception as exc:
-        logger.warning("yt-dlp (player_client=%s) failed: %s", player_client, exc)
-        return None
-
-    matches = glob.glob(os.path.join(out_dir, "input_video.*"))
-    return matches[0] if matches else None
-
-
-def _try_self_hosted_cobalt(url: str, out_dir: str) -> Optional[str]:
-    """Calls YOUR cobalt instance's JSON API, then streams the resulting
-    media URL to disk. No-ops if COBALT_API_URL isn't set - see
-    download_youtube_video's docstring before configuring this."""
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    if COBALT_API_KEY:
-        headers["Authorization"] = f"Api-Key {COBALT_API_KEY}"
-
-    try:
-        resp = requests.post(
-            COBALT_API_URL,
-            json={"url": url, "videoQuality": "1080", "downloadMode": "auto"},
-            headers=headers,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        stream_url = resp.json().get("url")
-        if not stream_url:
-            return None
-
-        video_path = os.path.join(out_dir, "input_video.mp4")
-        with requests.get(stream_url, stream=True, timeout=120) as r:
-            r.raise_for_status()
-            with open(video_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=1 << 20):
-                    f.write(chunk)
-        return video_path
-    except Exception as exc:
-        logger.warning("Self-hosted cobalt fallback failed: %s", exc)
-        return None
-
-
-def _finalize_download(path: str, out_dir: str) -> str:
-    """Normalizes whatever extension yt-dlp produced to input_video.mp4."""
-    target = os.path.join(out_dir, "input_video.mp4")
-    if os.path.abspath(path) != os.path.abspath(target):
-        os.replace(path, target)
-    return target
-
-
-def extract_audio(video_path: str, out_path: str) -> None:
-    """16kHz mono PCM WAV - whisper's expected input format."""
-    cmd = ["ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", out_path]
-    run_subprocess(cmd)
-
-
-_whisper_model = None
-_whisper_lock = threading.Lock()
+    raise Exception("All download streaming attempts failed. Please re-try with a different video URL.")
 
 
 def get_whisper_model():
