@@ -413,6 +413,9 @@ def to_hinglish(cues: List[dict]) -> List[dict]:
 _PLAYER_CLIENT_FALLBACKS = ["default", "android", "ios", "tv_simply"]
 
 
+import os
+import yt_dlp
+
 def download_youtube_video(url: str, output_dir: str) -> str:
     output_path = os.path.join(output_dir, "input_video.mp4")
     cookie_path = os.path.join(os.path.dirname(__file__), "cookies.txt")
@@ -423,7 +426,12 @@ def download_youtube_video(url: str, output_dir: str) -> str:
         'cookiefile': cookie_path,
         'quiet': True,
         'no_warnings': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios'],
+            }
+        },
+        'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
     }
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
