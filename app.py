@@ -440,11 +440,12 @@ def download_youtube_video(url: str, out_dir: str) -> str:
     if os.path.exists(output_path):
         return output_path
 
-    raise Exception("Download failed: File not created.")
-            logger.info("Loading whisper model '%s' (first request only)...", WHISPER_MODEL_SIZE)
-            _whisper_model = whisper.load_model(WHISPER_MODEL_SIZE)
-        return _whisper_model
+   raise Exception("Download failed: File not created.")
 
+def get_whisper_model():
+    logger.info("Loading whisper model '%s' (first request only)...", WHISPER_MODEL_SIZE)
+    _whisper_model = whisper.load_model(WHISPER_MODEL_SIZE)
+    return _whisper_model
 
 def transcribe_audio(audio_path: str) -> List[dict]:
     """Runs whisper with word-level timestamps enabled so downstream caption
