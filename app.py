@@ -414,45 +414,36 @@ _PLAYER_CLIENT_FALLBACKS = ["default", "android", "ios", "tv_simply"]
 
 
 def download_youtube_video(url: str, out_dir: str) -> str:
-    """Downloads YouTube video via open API instances to bypass datacenter IP blocks."""
+    """Downloads YouTube video using yt-dlp with mobile client spoofing to bypass bot checks."""
     import os
-    import requests
+    import yt_dlp
 
     output_path = os.path.join(out_dir, "input_video.mp4")
-    
-   # Clean shortened URLs to full watch URLs
+
+    # Clean link format
     if "youtu.be/" in url:
         video_id = url.split("youtu.be/")[1].split("?")[0]
         url = f"https://www.youtube.com/watch?v={video_id}"
 
-    # Try active public streaming endpoints sequentially
-    instances = [
-        "https://api.cobalt.red/",
-        "https://cobalt.api.sc3.io/",
-        "https://co.wuk.sh/api/json"
-    ]
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json"
+    ydl_opts = {
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'outtmpl': output_path,
+        'quiet': True,
+        'no_warnings': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios']
+            }
+        }
     }
 
-    for instance in instances:
-        try:
-            res = requests.post(instance, json=payload, headers=headers, timeout=12)
-            if res.status_code == 200:
-                data = res.json()
-                if data.get("status") in ["redirect", "tunnel", "picker"]:
-                    video_url = data.get("url")
-                    video_bytes = requests.get(video_url, stream=True, timeout=20)
-                    with open(output_path, "wb") as f:
-                        for chunk in video_bytes.iter_content(chunk_size=8192):
-                            f.write(chunk)
-                    return output_path
-        except Exception:
-            continue
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
 
-    raise Exception("All download streaming attempts failed. Please re-try with a different video URL.")
-
+    if os.path.exists(output_path):
+        return output_path
+    
+    raise Exception("Download failed: File not saved.")
 
 def get_whisper_model():
     """Lazily loads (and caches) the whisper model on first use - loading it
