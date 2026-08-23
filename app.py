@@ -420,17 +420,17 @@ def download_youtube_video(url: str, out_dir: str) -> str:
 
     output_path = os.path.join(out_dir, "input_video.mp4")
     
+   # Clean shortened URLs to full watch URLs
+    if "youtu.be/" in url:
+        video_id = url.split("youtu.be/")[1].split("?")[0]
+        url = f"https://www.youtube.com/watch?v={video_id}"
+
     # Try active public streaming endpoints sequentially
     instances = [
         "https://api.cobalt.red/",
-        "https://cobalt.api.sc3.io/"
+        "https://cobalt.api.sc3.io/",
+        "https://co.wuk.sh/api/json"
     ]
-
-    payload = {
-        "url": url,
-        "videoQuality": "720",
-        "downloadMode": "auto"
-    }
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json"
