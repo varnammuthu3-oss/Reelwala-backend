@@ -414,10 +414,9 @@ _PLAYER_CLIENT_FALLBACKS = ["default", "android", "ios", "tv_simply"]
 
 
 def download_youtube_video(url: str, out_dir: str) -> str:
-    """Downloads YouTube video using pytubefix to bypass datacenter bot detection."""
+    """Downloads YouTube video using pytubefix with WEB_CREATOR client to bypass bot detection."""
     import os
     from pytubefix import YouTube
-    from pytubefix.cli import on_progress
 
     output_path = os.path.join(out_dir, "input_video.mp4")
 
@@ -429,23 +428,19 @@ def download_youtube_video(url: str, out_dir: str) -> str:
         video_id = url.split("youtu.be/")[1].split("?")[0]
         url = f"https://www.youtube.com/watch?v={video_id}"
 
-    yt = YouTube(url, on_progress_callback=on_progress, client='WEB')
-    ys = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+    # WEB_CREATOR client bypasses bot verification on cloud hosts
+    yt = YouTube(url, client='WEB_CREATOR')
     
-    if not ys:
-        ys = yt.streams.get_highest_resolution()
+    stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+    if not stream:
+        stream = yt.streams.filter(adaptive=True, file_extension='mp4').first()
 
-    ys.download(output_path=out_dir, filename="input_video.mp4")
+    stream.download(output_path=out_dir, filename="input_video.mp4")
 
     if os.path.exists(output_path):
         return output_path
 
     raise Exception("Download failed: File not created.")
-    """Lazily loads (and caches) the whisper model on first use - loading it
-    at import time would slow down every reload/worker boot for no reason."""
-    global _whisper_model
-    with _whisper_lock:
-        if _whisper_model is None:
             logger.info("Loading whisper model '%s' (first request only)...", WHISPER_MODEL_SIZE)
             _whisper_model = whisper.load_model(WHISPER_MODEL_SIZE)
         return _whisper_model
