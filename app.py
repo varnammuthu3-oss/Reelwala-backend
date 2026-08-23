@@ -439,7 +439,7 @@ def download_youtube_video(url: str, out_dir: str) -> str:
 
     if os.path.exists(output_path):
         return output_path
-raise Exception("Download failed: File not created.")
+        raise Exception("Download failed: File not created.")
 
 def get_whisper_model():
     logger.info("Loading whisper model '%s' (first request only)...", WHISPER_MODEL_SIZE)
