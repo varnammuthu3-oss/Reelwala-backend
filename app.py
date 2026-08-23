@@ -390,3 +390,544 @@ def to_hinglish(cues: List[dict]) -> List[dict]:
     crashing the whole render."""
     try:
         from indic_transliteration import sanscript
+        from indic_transliteration.sanscript import transliterate
+    except ImportError:
+        logger.warning("indic_transliteration not installed - skipping Hinglish transliteration")
+        return cues
+
+    out = []
+    for cue in cues:
+        roman = transliterate(cue["text"], sanscript.DEVANAGARI, sanscript.ITRANS)
+        out.append({**cue, "text": roman})
+    return out
+
+
+# ============================================================================
+# MODEL 1 PIPELINE - URL TO SHORT
+# ============================================================================
+
+# Which "client identity" yt-dlp presents to YouTube. Bot-check behavior
+# differs per client and shifts every few months as YouTube adjusts its
+# detection - this order is what currently works most often, but expect
+# to revisit it; there's no flag that fixes this permanently.
+_PLAYER_CLIENT_FALLBACKS = ["default", "android", "ios", "tv_simply"]
+
+
+def download_youtube_video(url: str, out_dir: str) -> str:
+    """
+    Downloads `url` into `out_dir` as input_video.mp4 and returns that
+    path. Tries several independent mechanisms in order of reliability
+    before giving up - no single tier is a silent point of failure, and
+    none of them depend on a random third-party server's uptime.
+
+    Setup (all optional, but at least one is strongly recommended in prod):
+
+      YOUTUBE_COOKIES_FILE   Path to a cookies.txt exported from a real,
+                             logged-in YouTube account. This is the fix
+                             yt-dlp's own maintainers recommend first for
+                             "Sign in to confirm you're not a bot" on cloud
+                             hosts. How to get one without breaking it:
+                               1. Log into youtube.com in a PRIVATE/incognito
+                                  window (so nothing rotates the session).
+                               2. Export cookies with a trusted extension
+                                  (e.g. "Get cookies.txt LOCALLY").
+                               3. Upload the file to Render as a Secret File,
+                                  set YOUTUBE_COOKIES_FILE to its mounted path.
+                               4. Close the private window - do NOT log out,
+                                  logging out invalidates the exported cookies.
+                             Use a throwaway account, not your main one.
+
+      YOUTUBE_PROXY          e.g. "http://user:pass@residential-proxy:port".
+                             Datacenter IPs get YouTube's strictest treatment;
+                             a residential proxy sidesteps IP reputation
+                             entirely. Paid, but the most durable option.
+
+      COBALT_API_URL         Only if you deploy YOUR OWN cobalt instance
+      COBALT_API_KEY         (e.g. Railway's imputnet/cobalt template) -
+                             never point this at a random public instance.
+                             Public instances explicitly disallow third-
+                             party programmatic use per cobalt's own docs,
+                             and churn constantly.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    errors = []
+
+    # Tier 1: yt-dlp, cycling through client identities (+ cookies/proxy
+    # if configured). This alone resolves the vast majority of "sign in
+    # to confirm you're not a bot" cases on cloud hosts.
+    for client in _PLAYER_CLIENT_FALLBACKS:
+        path = _try_yt_dlp(url, out_dir, client)
+        if path:
+            return _finalize_download(path, out_dir)
+        errors.append(f"yt-dlp[player_client={client}] failed")
+
+    # Tier 2: your own cobalt instance, only if you've deployed one.
+    # Skipped entirely (not attempted, not an error) if unset.
+    if COBALT_API_URL:
+        path = _try_self_hosted_cobalt(url, out_dir)
+        if path:
+            return path
+        errors.append("self-hosted cobalt failed")
+
+    raise RuntimeError(
+        "Could not download video after trying all configured methods: "
+        + "; ".join(errors)
+        + ". Most likely fix: set YOUTUBE_COOKIES_FILE to a cookies.txt "
+        "exported from a real logged-in YouTube account (see this "
+        "function's docstring for the exact steps)."
+    )
+
+
+def _build_ydl_opts(out_dir: str, player_client: str) -> dict:
+    opts = {
+        "format": "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "outtmpl": os.path.join(out_dir, "input_video.%(ext)s"),
+        "merge_output_format": "mp4",
+        "quiet": True,
+        "no_warnings": True,
+        "extractor_args": {"youtube": {"player_client": [player_client]}},
+    }
+    if YOUTUBE_COOKIES_FILE and os.path.exists(YOUTUBE_COOKIES_FILE):
+        opts["cookiefile"] = YOUTUBE_COOKIES_FILE
+    if YOUTUBE_PROXY:
+        opts["proxy"] = YOUTUBE_PROXY
+    return opts
+
+
+def _try_yt_dlp(url: str, out_dir: str, player_client: str) -> Optional[str]:
+    opts = _build_ydl_opts(out_dir, player_client)
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
+    except Exception as exc:
+        logger.warning("yt-dlp (player_client=%s) failed: %s", player_client, exc)
+        return None
+
+    matches = glob.glob(os.path.join(out_dir, "input_video.*"))
+    return matches[0] if matches else None
+
+
+def _try_self_hosted_cobalt(url: str, out_dir: str) -> Optional[str]:
+    """Calls YOUR cobalt instance's JSON API, then streams the resulting
+    media URL to disk. No-ops if COBALT_API_URL isn't set - see
+    download_youtube_video's docstring before configuring this."""
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if COBALT_API_KEY:
+        headers["Authorization"] = f"Api-Key {COBALT_API_KEY}"
+
+    try:
+        resp = requests.post(
+            COBALT_API_URL,
+            json={"url": url, "videoQuality": "1080", "downloadMode": "auto"},
+            headers=headers,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        stream_url = resp.json().get("url")
+        if not stream_url:
+            return None
+
+        video_path = os.path.join(out_dir, "input_video.mp4")
+        with requests.get(stream_url, stream=True, timeout=120) as r:
+            r.raise_for_status()
+            with open(video_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1 << 20):
+                    f.write(chunk)
+        return video_path
+    except Exception as exc:
+        logger.warning("Self-hosted cobalt fallback failed: %s", exc)
+        return None
+
+
+def _finalize_download(path: str, out_dir: str) -> str:
+    """Normalizes whatever extension yt-dlp produced to input_video.mp4."""
+    target = os.path.join(out_dir, "input_video.mp4")
+    if os.path.abspath(path) != os.path.abspath(target):
+        os.replace(path, target)
+    return target
+
+
+def extract_audio(video_path: str, out_path: str) -> None:
+    """16kHz mono PCM WAV - whisper's expected input format."""
+    cmd = ["ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", out_path]
+    run_subprocess(cmd)
+
+
+_whisper_model = None
+_whisper_lock = threading.Lock()
+
+
+def get_whisper_model():
+    """Lazily loads (and caches) the whisper model on first use - loading it
+    at import time would slow down every reload/worker boot for no reason."""
+    global _whisper_model
+    with _whisper_lock:
+        if _whisper_model is None:
+            logger.info("Loading whisper model '%s' (first request only)...", WHISPER_MODEL_SIZE)
+            _whisper_model = whisper.load_model(WHISPER_MODEL_SIZE)
+        return _whisper_model
+
+
+def transcribe_audio(audio_path: str) -> List[dict]:
+    """Runs whisper with word-level timestamps enabled so downstream caption
+    chunking can align tightly with speech rather than whole-sentence blocks."""
+    model = get_whisper_model()
+    result = model.transcribe(audio_path, word_timestamps=True, fp16=False)
+    return result["segments"]  # each: {start, end, text, words: [...]}
+
+
+def select_highlight_window(segments: List[dict], target_duration: int) -> (float, float):
+    """Greedy heuristic: slide a `target_duration`-second window across the
+    transcript and keep the one with the highest spoken-word density. This
+    stands in for a real "best moment" / virality model - swap it for a
+    learned scorer (audio energy, laughter detection, an LLM ranking
+    transcript chunks, etc.) once you have data to train one on."""
+    if not segments:
+        return 0.0, float(target_duration)
+
+    total_end = segments[-1]["end"]
+    if total_end <= target_duration:
+        return 0.0, total_end
+
+    best_start, best_score = 0.0, -1
+    t = 0.0
+    step = 1.0
+    while t + target_duration <= total_end:
+        window_words = sum(
+            len(s["text"].split()) for s in segments if s["start"] >= t and s["end"] <= t + target_duration
+        )
+        if window_words > best_score:
+            best_score, best_start = window_words, t
+        t += step
+
+    return best_start, best_start + target_duration
+
+
+def translate_cues(cues: List[dict], target_lang_code: str) -> List[dict]:
+    """Translates each caption cue independently (rather than the whole
+    transcript at once) so timestamps stay aligned with translated text.
+    Note: for long videos, batch these calls or cache repeated phrases -
+    one HTTP round-trip per cue is fine for short-form clips only."""
+    translator = GoogleTranslator(source="auto", target=target_lang_code)
+    translated = []
+    for cue in cues:
+        try:
+            text = translator.translate(cue["text"])
+        except Exception:
+            logger.exception("Translation failed for cue, keeping original text")
+            text = cue["text"]
+        translated.append({**cue, "text": text or cue["text"]})
+    return translated
+
+
+def render_url_short(video_path: str, ass_path: str, start: float, end: float, out_path: str) -> None:
+    """Crops the source to a centered 9:16 frame, trims to the selected
+    highlight window, and burns the (already time-shifted) subtitle track -
+    all in a single ffmpeg pass."""
+    duration = end - start
+    vf = f"crop=ih*9/16:ih,scale={VIDEO_WIDTH}:{VIDEO_HEIGHT},ass={escape_ffmpeg_path(ass_path)}"
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(start), "-i", video_path, "-t", str(duration),
+        "-vf", vf,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
+        out_path,
+    ]
+    run_subprocess(cmd)
+
+
+# ============================================================================
+# MODEL 2 PIPELINE - SCRIPT TO SHORT
+# ============================================================================
+
+def expand_prompt_to_script(prompt: str, style: str) -> str:
+    """STUB: expands a short topic/prompt into a narrated script.
+    In production, replace this with a call to an LLM (Claude/GPT) using a
+    style-specific system prompt so tone actually matches
+    Village/Storytelling/High-Energy. Kept local here so the pipeline has
+    no external dependency beyond translation + TTS while that's wired up."""
+    style_openers = {
+        "Village/Traditional": "Ek chhote se gaon mein, ",
+        "Storytelling": "It all began on a quiet morning, when ",
+        "High Energy": "You will NOT believe what happened when ",
+    }
+    opener = style_openers.get(style, "")
+    return f"{opener}{prompt.strip()}"
+
+
+async def synthesize_speech(text: str, voice: str, out_audio_path: str) -> List[dict]:
+    """Streams edge-tts audio to disk while collecting WordBoundary events,
+    which give us free word-level timestamps in the *target* language -
+    no separate forced-alignment step needed for the caption track.
+    Offsets/durations arrive in 100-nanosecond units per the edge-tts API."""
+    communicate = edge_tts.Communicate(text, voice)
+    words: List[dict] = []
+    with open(out_audio_path, "wb") as audio_file:
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_file.write(chunk["data"])
+            elif chunk["type"] == "WordBoundary":
+                start = chunk["offset"] / 10_000_000
+                dur = chunk["duration"] / 10_000_000
+                words.append({"start": start, "end": start + dur, "text": chunk["text"]})
+    return words
+
+
+def estimate_word_timings(text: str, words_per_second: float = 2.5) -> List[dict]:
+    """Fallback timing model used only when voiceover is switched off, so
+    captions still have sane timing to render against a silent track."""
+    cues, t = [], 0.0
+    for word in text.split():
+        dur = 1 / words_per_second
+        cues.append({"start": t, "end": t + dur, "text": word})
+        t += dur
+    return cues
+
+
+def build_silent_audio(duration: float, out_path: str) -> None:
+    cmd = [
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+        "-t", str(duration), "-q:a", "9", "-acodec", "libmp3lame", out_path,
+    ]
+    run_subprocess(cmd)
+
+
+def build_background_clip(style: str, duration: float, out_path: str) -> None:
+    """Placeholder visual layer: a style-tinted solid frame with a slow Ken
+    Burns zoom so it doesn't feel static. Swap this for real stock footage
+    or a generative b-roll pipeline once you have licensed visual assets -
+    everything downstream (captions, audio mux) is agnostic to where this
+    file comes from."""
+    color, _accent = STYLE_PALETTES.get(style, STYLE_PALETTES["Storytelling"])
+    lavfi = (
+        f"color=c=0x{color}:s=1350x2400:d={duration}:r=25,"
+        f"zoompan=z='min(zoom+0.0006,1.15)':d=1:s={VIDEO_WIDTH}x{VIDEO_HEIGHT}:fps=25"
+    )
+    cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", lavfi, "-t", str(duration), out_path]
+    run_subprocess(cmd)
+
+
+def render_script_short(background_path: str, audio_path: str, ass_path: str, out_path: str, duration: float) -> None:
+    """Muxes the generated voiceover onto the background clip and burns the
+    caption track, trimmed to the audio's actual duration."""
+    vf = f"ass={escape_ffmpeg_path(ass_path)}"
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", background_path,
+        "-i", audio_path,
+        "-vf", vf,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
+        "-shortest", "-t", str(duration),
+        out_path,
+    ]
+    run_subprocess(cmd)
+
+
+# ============================================================================
+# JOB RUNNERS
+# Each wraps a full pipeline with progress updates (mirroring the stage
+# copy shown in the frontend prototype), plus credit refund + cleanup on
+# failure. These are plain `def`s so Starlette's BackgroundTasks runs them
+# on its threadpool automatically instead of blocking the event loop.
+# ============================================================================
+
+def run_url_pipeline_job(job_id: str, user_id: str, youtube_url: str, language: str, duration: int, cost: int) -> None:
+    work_dir = tempfile.mkdtemp(prefix=f"reelwala_{job_id}_")
+    try:
+        JOBS.update(job_id, status=JobStatus.PROCESSING, stage="Fetching source video...", progress=5)
+        video_path = download_youtube_video(youtube_url, work_dir)
+
+        JOBS.update(job_id, stage="Transcribing audio...", progress=25)
+        audio_path = os.path.join(work_dir, "audio.wav")
+        extract_audio(video_path, audio_path)
+        segments = transcribe_audio(audio_path)
+
+        JOBS.update(job_id, stage=f"Translating to {language}...", progress=50)
+        lang_cfg = LANGUAGE_CONFIG[language]
+        cues = chunk_into_cues(segments)
+        translated_cues = translate_cues(cues, lang_cfg["translate_code"])
+        if language == "Hinglish":
+            translated_cues = to_hinglish(translated_cues)
+
+        JOBS.update(job_id, stage="Generating captions...", progress=70)
+        start, end = select_highlight_window(segments, duration)
+        # Shift caption timestamps so they line up with the trimmed clip,
+        # keeping only cues that actually fall inside the selected window.
+        shifted_cues = [
+            {**c, "start": max(0.0, c["start"] - start), "end": max(0.0, c["end"] - start)}
+            for c in translated_cues
+            if c["start"] < end and c["end"] > start
+        ]
+        ass_path = os.path.join(work_dir, "captions.ass")
+        build_ass_subtitles(shifted_cues, lang_cfg["font"], ass_path)
+
+        JOBS.update(job_id, stage="Rendering vertical short...", progress=85)
+        output_path = os.path.join(OUTPUT_DIR, f"{job_id}.mp4")
+        render_url_short(video_path, ass_path, start, end, output_path)
+
+        JOBS.update(job_id, status=JobStatus.DONE, stage="Done", progress=100, output_path=output_path)
+    except Exception as exc:
+        logger.exception("url-short job %s failed", job_id)
+        CREDITS.refund(user_id, cost)
+        JOBS.update(job_id, status=JobStatus.FAILED, error=str(exc), stage="Failed")
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def run_script_pipeline_job(
+    job_id: str, user_id: str, prompt: str, language: str, style: str, voiceover: bool, cost: int
+) -> None:
+    work_dir = tempfile.mkdtemp(prefix=f"reelwala_{job_id}_")
+    try:
+        JOBS.update(job_id, status=JobStatus.PROCESSING, stage="Understanding your story...", progress=5)
+        raw_script = expand_prompt_to_script(prompt, style)
+
+        JOBS.update(job_id, stage="Writing script beats...", progress=20)
+        lang_cfg = LANGUAGE_CONFIG[language]
+        translate_code = lang_cfg["translate_code"]
+        translated_script = (
+            GoogleTranslator(source="auto", target=translate_code).translate(raw_script)
+            if translate_code != "en"
+            else raw_script
+        )
+        translated_script = translated_script or raw_script
+
+        audio_path = os.path.join(work_dir, "voice.mp3")
+        if voiceover:
+            JOBS.update(job_id, stage="Recording AI voiceover...", progress=40)
+            # edge_tts is async; this thread has no running loop (it's a
+            # BackgroundTasks worker thread), so asyncio.run() is safe here.
+            words = asyncio.run(synthesize_speech(translated_script, lang_cfg["tts_voice"], audio_path))
+        else:
+            words = estimate_word_timings(translated_script)
+            build_silent_audio(words[-1]["end"] if words else 6.0, audio_path)
+
+        duration = max((words[-1]["end"] if words else 6.0), 6.0)
+
+        JOBS.update(job_id, stage=f"Applying {style} style...", progress=60)
+        background_path = os.path.join(work_dir, "background.mp4")
+        build_background_clip(style, duration, background_path)
+
+        JOBS.update(job_id, stage=f"Translating to {language}...", progress=75)
+        caption_cues = chunk_into_cues(words)
+        if language == "Hinglish":
+            caption_cues = to_hinglish(caption_cues)
+        ass_path = os.path.join(work_dir, "captions.ass")
+        build_ass_subtitles(caption_cues, lang_cfg["font"], ass_path)
+
+        JOBS.update(job_id, stage="Rendering vertical short...", progress=88)
+        output_path = os.path.join(OUTPUT_DIR, f"{job_id}.mp4")
+        render_script_short(background_path, audio_path, ass_path, output_path, duration)
+
+        JOBS.update(job_id, status=JobStatus.DONE, stage="Done", progress=100, output_path=output_path)
+    except Exception as exc:
+        logger.exception("script-short job %s failed", job_id)
+        CREDITS.refund(user_id, cost)
+        JOBS.update(job_id, status=JobStatus.FAILED, error=str(exc), stage="Failed")
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+# ============================================================================
+# FASTAPI APP
+# ============================================================================
+
+app = FastAPI(title="Reelwala Processing Engine", version="0.1.0")
+
+# The React prototype runs on a different origin during development -
+# lock allow_origins down to your real frontend domain(s) in production.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.post("/api/generate/url-short", response_model=JobResponse)
+def generate_url_short(req: UrlShortRequest, background_tasks: BackgroundTasks):
+    """Model 1: URL to Short. Costs 4 credits, charged up front; refunded
+    automatically if the pipeline throws."""
+    if not CREDITS.try_charge(req.user_id, COST_URL_SHORT):
+        raise HTTPException(status_code=402, detail=f"Insufficient credits. This reel costs {COST_URL_SHORT} credits.")
+
+    job = JOBS.create(user_id=req.user_id, kind="url", credits_charged=COST_URL_SHORT)
+    background_tasks.add_task(
+        run_url_pipeline_job,
+        job.id, req.user_id, str(req.youtube_url), req.language.value, req.duration, COST_URL_SHORT,
+    )
+    return JobResponse(job_id=job.id, status=job.status, credits_remaining=CREDITS.get_balance(req.user_id))
+
+
+@app.post("/api/generate/script-short", response_model=JobResponse)
+def generate_script_short(req: ScriptShortRequest, background_tasks: BackgroundTasks):
+    """Model 2: Script to Short. Costs 9 credits, charged up front; refunded
+    automatically if the pipeline throws."""
+    if not CREDITS.try_charge(req.user_id, COST_SCRIPT_SHORT):
+        raise HTTPException(status_code=402, detail=f"Insufficient credits. This reel costs {COST_SCRIPT_SHORT} credits.")
+
+    job = JOBS.create(user_id=req.user_id, kind="script", credits_charged=COST_SCRIPT_SHORT)
+    background_tasks.add_task(
+        run_script_pipeline_job,
+        job.id, req.user_id, req.prompt, req.language.value, req.style.value, req.voiceover, COST_SCRIPT_SHORT,
+    )
+    return JobResponse(job_id=job.id, status=job.status, credits_remaining=CREDITS.get_balance(req.user_id))
+
+
+@app.get("/api/jobs/{job_id}", response_model=JobStatusResponse)
+def get_job_status(job_id: str):
+    """Poll this from the frontend's progress bar / stage text."""
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    download_url = f"/api/download/{job_id}" if job.status == JobStatus.DONE else None
+    return JobStatusResponse(
+        job_id=job.id, status=job.status, stage=job.stage, progress=job.progress,
+        download_url=download_url, error=job.error,
+    )
+
+
+@app.get("/api/download/{job_id}")
+def download_job(job_id: str):
+    """Serves the rendered MP4 once a job is done.
+    NOTE: for production, replace this with a signed/expiring URL on
+    object storage rather than serving straight off local disk."""
+    job = JOBS.get(job_id)
+    if job is None or job.status != JobStatus.DONE or not job.output_path:
+        raise HTTPException(status_code=404, detail="Rendered file not ready")
+    return FileResponse(job.output_path, media_type="video/mp4", filename=f"reelwala_{job_id}.mp4")
+
+
+@app.get("/api/credits/{user_id}", response_model=CreditsResponse)
+def get_credits(user_id: str):
+    return CreditsResponse(user_id=user_id, credits=CREDITS.get_balance(user_id))
+
+
+@app.post("/api/credits/topup", response_model=CreditsResponse)
+def topup_credits(req: TopupRequest):
+    """Mirrors the mock Razorpay flow in the frontend prototype for local
+    testing.
+    NOTE: in real production, never credit an account directly off a client
+    call like this - verify the Razorpay payment signature server-side (or
+    handle it entirely from Razorpay's webhook) before calling
+    CREDITS.topup()."""
+    plan = CREDIT_PLANS.get(req.plan)
+    if plan is None:
+        raise HTTPException(status_code=400, detail=f"Unknown plan '{req.plan}'. Valid plans: {list(CREDIT_PLANS)}")
+
+    CREDITS.topup(req.user_id, plan["credits"])
+    return CreditsResponse(user_id=req.user_id, credits=CREDITS.get_balance(req.user_id))
+
+
+@app.get("/healthz")
+def health_check():
+    return {"status": "ok"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
