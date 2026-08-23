@@ -429,7 +429,7 @@ def download_youtube_video(url: str, out_dir: str) -> str:
         url = f"https://www.youtube.com/watch?v={video_id}"
 
     # WEB_CREATOR client bypasses bot verification on cloud hosts
-    yt = YouTube(url, client='WEB_CREATOR')
+    yt = YouTube(url, client='WEB_CREATOR', cookiefile='cookies.txt')
     
     stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
     if not stream:
@@ -439,7 +439,7 @@ def download_youtube_video(url: str, out_dir: str) -> str:
 
     if os.path.exists(output_path):
         return output_path
-        raise Exception("Download failed: File not created.")
+            raise Exception("Download failed: File not created.")
 
 def get_whisper_model():
     logger.info("Loading whisper model '%s' (first request only)...", WHISPER_MODEL_SIZE)
