@@ -414,38 +414,33 @@ _PLAYER_CLIENT_FALLBACKS = ["default", "android", "ios", "tv_simply"]
 
 
 def download_youtube_video(url: str, out_dir: str) -> str:
-    """Downloads YouTube video using yt-dlp with mobile client spoofing to bypass bot checks."""
+    """Downloads YouTube video using pytubefix to bypass datacenter bot detection."""
     import os
-    import yt_dlp
+    from pytubefix import YouTube
+    from pytubefix.cli import on_progress
 
     output_path = os.path.join(out_dir, "input_video.mp4")
 
-    # Clean link format
-    if "youtu.be/" in url:
+    # Clean Shorts or shortened URLs
+    if "/shorts/" in url:
+        video_id = url.split("/shorts/")[1].split("?")[0]
+        url = f"https://www.youtube.com/watch?v={video_id}"
+    elif "youtu.be/" in url:
         video_id = url.split("youtu.be/")[1].split("?")[0]
         url = f"https://www.youtube.com/watch?v={video_id}"
 
-    ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': output_path,
-        'quiet': True,
-        'no_warnings': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios']
-            }
-        }
-    }
+    yt = YouTube(url, on_progress_callback=on_progress, client='WEB')
+    ys = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+    
+    if not ys:
+        ys = yt.streams.get_highest_resolution()
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    ys.download(output_path=out_dir, filename="input_video.mp4")
 
     if os.path.exists(output_path):
         return output_path
-    
-    raise Exception("Download failed: File not saved.")
 
-def get_whisper_model():
+    raise Exception("Download failed: File not created.")
     """Lazily loads (and caches) the whisper model on first use - loading it
     at import time would slow down every reload/worker boot for no reason."""
     global _whisper_model
