@@ -413,38 +413,25 @@ def to_hinglish(cues: List[dict]) -> List[dict]:
 _PLAYER_CLIENT_FALLBACKS = ["default", "android", "ios", "tv_simply"]
 
 
-def download_youtube_video(url: str, out_dir: str) -> str:
-    """Downloads YouTube video using pytubefix with WEB_CREATOR client to bypass bot detection."""
-    import os
-    from pytubefix import YouTube
-
-    output_path = os.path.join(out_dir, "input_video.mp4")
-
-    # Clean Shorts or shortened URLs
-    if "/shorts/" in url:
-        video_id = url.split("/shorts/")[1].split("?")[0]
-        url = f"https://www.youtube.com/watch?v={video_id}"
-    elif "youtu.be/" in url:
-        video_id = url.split("youtu.be/")[1].split("?")[0]
-        url = f"https://www.youtube.com/watch?v={video_id}"
-
-    # WEB_CREATOR client bypasses bot verification on cloud hosts
-    yt = YouTube(url, client='WEB_CREATOR', cookiefile='cookies.txt')
+def download_youtube_video(url: str, output_dir: str) -> str:
+    output_path = os.path.join(output_dir, "input_video.mp4")
+    cookie_path = os.path.join(os.path.dirname(__file__), "cookies.txt")
     
-    stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
-    if not stream:
-        stream = yt.streams.filter(adaptive=True, file_extension='mp4').first()
-
-    stream.download(output_path=out_dir, filename="input_video.mp4")
-
+    ydl_opts = {
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'outtmpl': output_path,
+        'cookiefile': cookie_path,
+        'quiet': True,
+        'no_warnings': True,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    }
+    
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+        
     if os.path.exists(output_path):
         return output_path
-            raise Exception("Download failed: File not created.")
-
-def get_whisper_model():
-    logger.info("Loading whisper model '%s' (first request only)...", WHISPER_MODEL_SIZE)
-    _whisper_model = whisper.load_model(WHISPER_MODEL_SIZE)
-    return _whisper_model
+    raise Exception("Download failed: File not created.")
 
 def transcribe_audio(audio_path: str) -> List[dict]:
     """Runs whisper with word-level timestamps enabled so downstream caption
