@@ -413,15 +413,12 @@ def to_hinglish(cues: List[dict]) -> List[dict]:
 _PLAYER_CLIENT_FALLBACKS = ["default", "android", "ios", "tv_simply"]
 
 
-import os
-import yt_dlp
-
 def download_youtube_video(url: str, output_dir: str) -> str:
     output_path = os.path.join(output_dir, "input_video.mp4")
     cookie_path = os.path.join(os.path.dirname(__file__), "cookies.txt")
     
     ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'format': 'best[ext=mp4]/best',
         'outtmpl': output_path,
         'cookiefile': cookie_path,
         'quiet': True,
@@ -433,6 +430,13 @@ def download_youtube_video(url: str, output_dir: str) -> str:
         },
         'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
     }
+    
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+        
+    if os.path.exists(output_path):
+        return output_path
+    raise Exception("Download failed: File not created.")
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
