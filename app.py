@@ -413,26 +413,31 @@ def to_hinglish(cues: List[dict]) -> List[dict]:
 _PLAYER_CLIENT_FALLBACKS = ["default", "android", "ios", "tv_simply"]
 
 
+import requests
+
 def download_youtube_video(url: str, output_dir: str) -> str:
     output_path = os.path.join(output_dir, "input_video.mp4")
-    cookie_path = os.path.join(os.path.dirname(__file__), "cookies.txt")
     
-    ydl_opts = {
-        'format': 'best[ext=mp4]/best',
-        'outtmpl': output_path,
-        'cookiefile': cookie_path,
-        'quiet': True,
-        'no_warnings': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios'],
-            }
-        },
-        'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    api_url = "https://api.cobalt.tools/api/json"
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "url": url,
+        "vCodec": "h264"
     }
     
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    response = requests.post(api_url, json=payload, headers=headers)
+    data = response.json()
+    
+    if "url" in data:
+        video_bytes = requests.get(data["url"]).content
+        with open(output_path, "wb") as f:
+            f.write(video_bytes)
+        return output_path
+    else:
+        raise Exception("YouTube blocked server download. Please try another link.")
         
     if os.path.exists(output_path):
         return output_path
