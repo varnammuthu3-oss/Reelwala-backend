@@ -418,21 +418,27 @@ import requests
 def download_youtube_video(url: str, output_dir: str) -> str:
     output_path = os.path.join(output_dir, "input_video.mp4")
     
-    api_url = "https://api.cobalt.tools/api/json"
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "url": url,
-        "vCodec": "h264"
-    }
+    # Extract YouTube video ID
+    if "shorts/" in url:
+        video_id = url.split("shorts/")[1].split("?")[0]
+    elif "v=" in url:
+        video_id = url.split("v=")[1].split("&")[0]
+    else:
+        video_id = url.rstrip("/").split("/")[-1].split("?")[0]
+        
+    api_url = f"https://api.piped.video/streams/{video_id}"
+    res = requests.get(api_url).json()
     
-    response = requests.post(api_url, json=payload, headers=headers)
-    data = response.json()
+    # Find direct video download stream
+    video_stream = res["videoStreams"][0]["url"]
+    video_bytes = requests.get(video_stream).content
     
-    if "url" in data:
-        video_bytes = requests.get(data["url"]).content
+    with open(output_path, "wb") as f:
+        f.write(video_bytes)
+        
+    if os.path.exists(output_path):
+        return output_path
+    raise Exception("Download failed.")
         with open(output_path, "wb") as f:
             f.write(video_bytes)
         return output_path
