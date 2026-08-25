@@ -1,3 +1,8 @@
+import os
+import requests
+import tempfile
+from fastapi import FastAPI, File, UploadFile
+# ... keep all your other existing import lines here ...
 """
 Reelwala - Video Processing Engine (app.py)
 =============================================
@@ -407,13 +412,6 @@ def to_hinglish(cues: List[dict]) -> List[dict]:
 # ============================================================================
 
 # Which "client identity" yt-dlp presents to YouTube. Bot-check behavior
-# differs per client and shifts every few months as YouTube adjusts its
-# detection - this order is what currently works most often, but expect
-# to revisit it; there's no flag that fixes this permanently.
-_PLAYER_CLIENT_FALLBACKS = ["default", "android", "ios", "tv_simply"]
-
-import requests
-
 def download_youtube_video(url: str, output_dir: str) -> str:
     output_path = os.path.join(output_dir, "input_video.mp4")
     
@@ -432,6 +430,10 @@ def download_youtube_video(url: str, output_dir: str) -> str:
     
     with open(output_path, "wb") as f:
         f.write(video_bytes)
+        
+    if os.path.exists(output_path):
+        return output_path
+    raise Exception("Download failed.")
         
     if os.path.exists(output_path):
         return output_path
